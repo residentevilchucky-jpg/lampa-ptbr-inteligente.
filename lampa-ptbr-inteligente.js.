@@ -1,0 +1,192 @@
+
+(function () {
+    'use strict';
+
+    if (window.lampa_ptbr_inteligente) return;
+    window.lampa_ptbr_inteligente = true;
+
+    var tentativas = 0;
+    var maxTentativas = 10;
+    var ativo = false;
+
+    function normalizar(lang) {
+        return String(lang || '')
+            .toLowerCase()
+            .replace('_', '-')
+            .trim();
+    }
+
+    function idiomaPTBR(lang) {
+        var l = normalizar(lang);
+        return l === 'pt-br' ||
+               l === 'por-br' ||
+               l === 'ptbr' ||
+               l === 'português brasileiro' ||
+               l === 'portugues brasileiro';
+    }
+
+    function idiomaPT(lang) {
+        var l = normalizar(lang);
+        return l === 'pt' ||
+               l === 'por' ||
+               l === 'portuguese' ||
+               l === 'português' ||
+               l === 'portugues';
+    }
+
+    function selecionarAudio() {
+        if (!ativo || tentativas >= maxTentativas) return;
+
+        tentativas++;
+
+        try {
+            var video = Lampa.PlayerVideo.video();
+            if (!video) return;
+
+            var tracks = video.audioTracks;
+            if (!tracks || !tracks.length) return;
+
+            var escolhido = null;
+            var generico = null;
+
+            for (var i = 0; i < tracks.length; i++) {
+                var idioma = tracks[i].language ||
+                    (tracks[i].extra && tracks[i].extra.language);
+
+                if (idiomaPTBR(idioma)) {
+                    escolhido = tracks[i];
+                    break;
+                }
+
+                if (!generico && idiomaPT(idioma)) {
+                    generico = tracks[i];
+                }
+            }
+
+            escolhido = escolhido || generico;
+
+            if (escolhido) {
+                escolhido.enabled = true;
+                console.log('[Lampa PT-BR] Áudio selecionado:',
+                    escolhido.language);
+                return;
+            }
+
+            // Compatibilidade direta com Samsung AVPlay
+            if (window.webapis &&
+                webapis.avplay &&
+                webapis.avplay.getTotalTrackInfo) {
+
+                var lista = webapis.avplay.getTotalTrackInfo();
+                var audio = [];
+
+                for (var j = 0; j < lista.length; j++) {
+                    if (lista[j].type !== 'AUDIO') continue;
+
+                    var info = {};
+                    try {
+                        info = JSON.parse(lista[j].extra_info);
+                    } catch (e) {}
+
+                    audio.push({
+                        index: lista[j].index,
+                        language: info.language
+                    });
+                }
+
+                var alvo = null;
+
+                for (var k = 0; k < audio.length; k++) {
+                    if (idiomaPTBR(audio[k].language)) {
+                        alvo = audio[k];
+                        break;
+                    }
+                }
+
+                if (!alvo) {
+                    for (var m = 0; m < audio.length; m++) {
+                        if (idiomaPT(audio[m].language)) {
+                            alvo = audio[m];
+                            break;
+                        }
+                    }
+                }
+
+                if (alvo) {
+                    webapis.avplay.setSelectTrack(
+                        'AUDIO',
+                        alvo.index
+                    );
+                    console.log('[Lampa PT-BR] AVPlay selecionou:',
+                        alvo.language);
+                }
+            }
+        } catch (e) {
+            console.log('[Lampa PT-BR] Tentando novamente:', e);
+        }
+    }
+
+    function selecionarLegenda() {
+        try {
+            var video = Lampa.PlayerVideo.video();
+            if (!video || !video.textTracks) return;
+
+            var tracks = video.textTracks;
+
+            for (var i = 0; i < tracks.length; i++) {
+                var idioma = tracks[i].language ||
+                    (tracks[i].extra && tracks[i].extra.track_lang);
+
+                if (idiomaPTBR(idioma)) {
+                    tracks[i].mode = 'showing';
+                    console.log('[Lampa PT-BR] Legenda PT-BR ativada');
+                    return;
+                }
+            }
+        } catch (e) {}
+    }
+
+    function iniciar() {
+        ativo = true;
+        tentativas = 0;
+
+        selecionarAudio();
+        selecionarLegenda();
+    }
+
+    function limpar() {
+        ativo = false;
+        tentativas = 0;
+    }
+
+    function instalar() {
+        if (!window.Lampa ||
+            !Lampa.Player ||
+            !Lampa.PlayerVideo) return;
+
+        Lampa.Player.listener.follow('start', iniciar);
+
+        Lampa.PlayerVideo.listener.follow('canplay', function () {
+            iniciar();
+        });
+
+        Lampa.PlayerVideo.listener.follow('timeupdate', function () {
+            if (ativo && tentativas < maxTentativas) {
+                selecionarAudio();
+                selecionarLegenda();
+            }
+        });
+
+        Lampa.Player.listener.follow('destroy', limpar);
+
+        console.log('[Lampa PT-BR Inteligente] Instalado!');
+    }
+
+    if (window.appready) {
+        instalar();
+    } else if (window.Lampa) {
+        Lampa.Listener.follow('app', function (event) {
+            if (event.type === 'ready') instalar();
+        });
+    }
+})();
